@@ -1,5 +1,9 @@
 from setuptools import setup
 
+
+with open("./requirements.txt") as requirements_txt:
+    requirements = requirements_txt.readlines()
+
 setup(
     name='cool-downloader',
     version='1.0.0',
@@ -9,6 +13,7 @@ setup(
     author='nexy7574',
     author_email='',
     description='I got bored and decided I wanted a cool looking downloader.',
+    requires=requirements,
     entry_points={
         "console_scripts": [
             "cdl = downloader.main:download_file",
@@ -16,4 +21,5 @@ setup(
             "cdownloader = downloader.main:download_file"
         ]
     }
+
 )
