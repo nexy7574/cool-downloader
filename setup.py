@@ -13,7 +13,7 @@ setup(
     author='nexy7574',
     author_email='',
     description='I got bored and decided I wanted a cool looking downloader.',
-    requires=requirements,
+    install_requires=requirements,
     entry_points={
         "console_scripts": [
             "cdl = downloader.main:download_file",
