@@ -23,17 +23,27 @@ USER_AGENTS = {
     "Version/15.3 Safari/605.1.15",
     "default": "python-httpx/" + __version__,
 }
+WARNING_DISPLAYED = False
 
 
 async def check_ram(console: Console, event: asyncio.Event, warning_at: int = 1):
+    global WARNING_DISPLAYED
     worry_level = 1024**3 * warning_at
     while not event.is_set():
         result = await asyncio.to_thread(psutil.virtual_memory)
         if result.available < worry_level:
-            console.log(
-                "[red]Warning: Less than %d gigabyte%s of memory is available!"
-                % (warning_at, "s" if warning_at != 1 else "")
-            )
+            if WARNING_DISPLAYED is False:
+                console.log(
+                    "[red]Memory warning: Less than %d gigabyte%s of memory is available! (%.2fGB Free)"
+                    % (warning_at, "s" if warning_at != 1 else "", result.available / 1024 ** 3)
+                )
+                WARNING_DISPLAYED = True
+        else:
+            if WARNING_DISPLAYED:
+                console.log(
+                    "[green]Memory warning resolved."
+                )
+                WARNING_DISPLAYED = False
         await asyncio.sleep(5)
 
 
@@ -199,6 +209,10 @@ def download_file(
         auth = None
     else:
         auth = (username, password)
+
+    if not urls:
+        console.log("No URLs provided.")
+        return
 
     async def run():
         threads = []
