@@ -1,4 +1,6 @@
 from setuptools import setup
+from subprocess import run
+from sys import stdout
 
 
 with open("./requirements.txt") as requirements_txt:
@@ -6,7 +8,9 @@ with open("./requirements.txt") as requirements_txt:
 
 setup(
     name="cool-downloader",
-    version="1.0.0",
+    version=run(
+        ("git", "rev-parse", "--short", "HEAD"), capture_output=True, encoding="utf-8", check=True
+    ).stdout.strip(),
     packages=["downloader"],
     url="https://github.com/EEKIM10/cool-downloader",
     license="MIT",
