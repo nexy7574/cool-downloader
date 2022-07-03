@@ -1,0 +1,3 @@
+https://speed.hetzner.de/100MB.bin
+https://speed.hetzner.de/1GB.bin
+https://speed.hetzner.de/10GB.bin

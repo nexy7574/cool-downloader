@@ -63,13 +63,7 @@ async def downloader(
             url = response.url.path
             fp = url.split("/")[-1]
             file = directory / fp
-            file = file.with_name(
-                re.sub(
-                    r"\W",
-                    "-",
-                    file.name
-                )
-            )
+            file = file.with_name(re.sub(r"\W", "-", file.name))
             progress.console.log(f"Saving {escape(repr(url))} to [blue][link=file://{file.absolute()}]{file.name}[/].")
 
         if not file.suffix and response.headers.get("Content-Type"):
@@ -153,6 +147,13 @@ async def downloader(
     default=1,
     help="At what point to worry about ram usage " "(display a warning when there is less than this much ram free)",
 )
+@click.option(
+    "--from-list",
+    "--from-file",
+    default=None,
+    type=Path,
+    help="A file containing a list of URLs to grab. One URL per line. Defaults to None.",
+)
 def download_file(
     urls: List[str],
     username: str = None,
@@ -161,8 +162,16 @@ def download_file(
     buffer: bool = False,
     user_agent: str = "default",
     ram_warning_at: int = 1,
+    from_list: Path = None,
 ):
     console = Console()
+    if from_list is not None:
+        with from_list.open("r") as _file:
+            urls = list(filter(lambda ln: bool(ln), _file.readlines()))
+            console.log(
+                f"Loaded [green]{len(urls)}[/] urls from [file={from_list.absolute().as_uri()}]{from_list.name}"
+            )
+
     ua = USER_AGENTS.get(user_agent.lower().strip())
     if ua is None:
         if len(user_agent.split(" ")) == 1:
@@ -203,11 +212,12 @@ def download_file(
                 speed_estimate_period=10,
                 refresh_per_second=5,
                 expand=True,
-                console=console
+                console=console,
             ) as progress:
                 if buffer:
                     timer = asyncio.create_task(check_ram(progress.console, timer_event, ram_warning_at))
                 for url in urls:
+                    url = url.strip()
                     task = asyncio.create_task(
                         downloader(client, progress, url, authorisation=auth, directory=output_directory, buffer=buffer)
                     )
