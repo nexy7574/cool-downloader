@@ -2,7 +2,7 @@ from setuptools import setup
 
 
 with open("./requirements.txt") as requirements_txt:
-    requirements = requirements_txt.readlines()
+    requirements = requirements_txt.read().splitlines()
 
 setup(
     name='cool-downloader',
