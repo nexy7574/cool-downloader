@@ -63,9 +63,22 @@ async def downloader(
                 task,
                 total=1,
                 completed=1,
-                description="Get %s - [red]status %d[/]" % (response.url.netloc.decode(), response.status_code),
+                description="Get %s - [red]status %d[/]" % (response.url.host, response.status_code),
             )
             return
+
+        display_domain = response.url.host
+        if response.history:
+            for historical_response in reversed(response.history):
+                historical_response: Response
+                progress.console.log(
+                    "{} -> {}".format(
+                        escape(str(historical_response.url)),
+                        escape(str((historical_response.history or [response])[-1].url)),
+                    )
+                )
+                if historical_response.url.host not in display_domain:
+                    display_domain += "/" + historical_response.url.host
 
         if file is None:
             url = response.url.path
@@ -94,7 +107,7 @@ async def downloader(
                     f"Download time is unknown and ETA will be unavailable."
                 )
         except (TypeError, ValueError):
-            progress.update(task, total=1, completed=1, description="Get %s - failed!" % response.url.netloc.decode())
+            progress.update(task, total=1, completed=1, description="Get %s - failed!" % response.url.host)
         else:
             progress.update(
                 task,
@@ -102,7 +115,7 @@ async def downloader(
                 completed=0,
                 description="Get %s (%r)"
                 % (
-                    response.url.netloc.decode(),
+                    display_domain,
                     file.name,
                 ),
                 pulse=True,
@@ -128,7 +141,7 @@ async def downloader(
                         completed=response.num_bytes_downloaded,
                         description="Get %s (%r)"
                         % (
-                            response.url.netloc.decode(),
+                            response.url.host,
                             file.name,
                         ),
                         pulse=True,
@@ -256,12 +269,13 @@ def download_file(
                     await asyncio.wait(threads, timeout=None, return_when=asyncio.ALL_COMPLETED)
                 except (KeyboardInterrupt, asyncio.CancelledError, RuntimeError):
                     for task in progress.tasks:
-                        progress.update(
-                            task.id,
-                            total=task.total,
-                            completed=task.total,
-                            description=task.description + " (cancelled)",
-                        )
+                        if task.completed != task.total:
+                            progress.update(
+                                task.id,
+                                total=task.total,
+                                completed=task.total,
+                                description=task.description + " (cancelled)",
+                            )
                     progress.stop()
                     for thread in threads:
                         try:
