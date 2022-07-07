@@ -65,7 +65,7 @@ async def downloader(
                 task,
                 total=1,
                 completed=1,
-                description="Get %s - status %d" % (response.url.netloc.decode(), response.status_code),
+                description="Get %s - [red]status %d[/]" % (response.url.netloc.decode(), response.status_code),
             )
             return
 
@@ -73,8 +73,8 @@ async def downloader(
             url = response.url.path
             fp = url.split("/")[-1]
             file = directory / fp
-            file = file.with_name(re.sub(r"\W", "-", file.name))
-            progress.console.log(f"Saving {escape(repr(url))} to [blue][link=file://{file.absolute()}]{file.name}[/].")
+            file = file.with_name(re.sub(r"[^\w\-.]", "-", file.name))
+            progress.console.log(f"Saving {escape(repr(url))} to [blue][link={file.absolute().as_uri()}]{file.name}[/].")
 
         if not file.suffix and response.headers.get("Content-Type"):
             ct = response.headers["Content-Type"].split(";")[0].split("/")[1]
@@ -164,6 +164,8 @@ async def downloader(
     type=Path,
     help="A file containing a list of URLs to grab. One URL per line. Defaults to None.",
 )
+@click.option("--follow-redirects", is_flag=True, default=False)
+@click.option("--file-names", help="A list of comma-separated file names. Defaults to automatically generated")
 def download_file(
     urls: List[str],
     username: str = None,
@@ -173,6 +175,8 @@ def download_file(
     user_agent: str = "default",
     ram_warning_at: int = 1,
     from_list: Path = None,
+        follow_redirects: bool = False,
+        file_names: str = None
 ):
     console = Console()
     if from_list is not None:
@@ -214,11 +218,17 @@ def download_file(
         console.log("No URLs provided.")
         return
 
+    if file_names:
+        file_names = file_names.split(",")
+        file_names += [None] * (len(urls) - len(file_names))
+    else:
+        file_names = [None] * len(urls)
+
     async def run():
         threads = []
         timer = None
         timer_event = asyncio.Event()
-        async with AsyncClient(http2=True, headers={"User-Agent": ua}) as client:
+        async with AsyncClient(http2=True, headers={"User-Agent": ua}, follow_redirects=follow_redirects) as client:
             with Progress(
                 *Progress.get_default_columns(),
                 DownloadColumn(),
@@ -230,10 +240,14 @@ def download_file(
             ) as progress:
                 if buffer:
                     timer = asyncio.create_task(check_ram(progress.console, timer_event, ram_warning_at))
-                for url in urls:
+                for n, url in enumerate(urls):
                     url = url.strip()
+                    if file_names[n] is not None:
+                        path = Path(file_names[n])
+                    else:
+                        path = None
                     task = asyncio.create_task(
-                        downloader(client, progress, url, authorisation=auth, directory=output_directory, buffer=buffer)
+                        downloader(client, progress, url, path, authorisation=auth, directory=output_directory, buffer=buffer)
                     )
                     threads.append(task)
                 try:
