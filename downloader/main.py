@@ -141,7 +141,7 @@ async def downloader(
                         completed=response.num_bytes_downloaded,
                         description="Get %s (%r)"
                         % (
-                            response.url.host,
+                            display_domain,
                             file.name,
                         ),
                         pulse=True,
@@ -232,7 +232,10 @@ def download_file(
         return
 
     if file_names:
-        file_names = file_names.split(",")
+        file_names = list(file_names.split(","))
+        for n, fn in enumerate(file_names):
+            if fn == "-":
+                file_names[n] = None
         file_names += [None] * (len(urls) - len(file_names))
     else:
         file_names = [None] * len(urls)
