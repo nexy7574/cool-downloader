@@ -80,6 +80,10 @@ async def downloader(
                 if historical_response.url.host not in display_domain:
                     display_domain += "/" + historical_response.url.host
 
+        # Now we need to perform some black magic fuckery
+        display_domain = "/".join(reversed(display_domain.split("/")))
+        # ^ This just reverses the order of the domains so that they're in the correct order
+
         if file is None:
             url = response.url.path
             fp = url.split("/")[-1]
