@@ -1,11 +1,16 @@
 import asyncio
+import os
 import re
 import time
+import sys
+import warnings
 from typing import Tuple, List
+from urllib.parse import urlparse
 
 import click
 import psutil
-from httpx import AsyncClient, Response, __version__
+from click.exceptions import Exit, Abort
+from httpx import AsyncClient, Response, __version__, Timeout, TimeoutException, ReadError, ConnectError
 from rich.markup import escape
 from rich.progress import Progress, DownloadColumn, TransferSpeedColumn
 from rich.console import Console
@@ -45,6 +50,20 @@ async def check_ram(console: Console, event: asyncio.Event, warning_at: int = 1)
         await asyncio.sleep(5)
 
 
+async def requires_authentication(client: AsyncClient, url: str, *, method: str = "GET", **kwargs) -> bool:
+    if kwargs.pop("try_head_first", False) is True:
+        response = await client.head(url, **kwargs)
+        if response.status_code == 401 and response.headers.get("WWW-Authenticate", "").startswith("Basic"):
+            return True
+
+    async with client.stream(method, url, **kwargs) as response:
+        await response.aclose()
+        if response.status_code == 401 and response.headers.get("WWW-Authenticate", "").startswith("Basic"):
+            # We only support basic auth rn
+            return True
+        return False
+
+
 async def downloader(
     client: AsyncClient,
     progress: Progress,
@@ -55,110 +74,151 @@ async def downloader(
     authorisation: Tuple[str, str] = None,
     buffer: bool = True,
 ):
-    task = progress.add_task("Get %s - headers" % url, completed=50)
-    async with client.stream("GET", url, auth=authorisation) as response:
-        response: Response
-        if response.status_code not in range(200, 300):
-            progress.update(
-                task,
-                total=1,
-                completed=1,
-                description="Get %s - [red]status %d[/]" % (response.url.host, response.status_code),
-            )
-            return
-
-        display_domain = response.url.host
-        if response.history:
-            for historical_response in reversed(response.history):
-                historical_response: Response
-                progress.console.log(
-                    "{} -> {}".format(
-                        escape(str(historical_response.url)),
-                        escape(str((historical_response.history or [response])[-1].url)),
-                    )
-                )
-                if historical_response.url.host not in display_domain:
-                    display_domain += "/" + historical_response.url.host
-
-        # Now we need to perform some black magic fuckery
-        display_domain = "/".join(reversed(display_domain.split("/")))
-        # ^ This just reverses the order of the domains so that they're in the correct order
-
-        if file is None:
-            url = response.url.path
-            fp = url.split("/")[-1]
-            file = directory / fp
-            file = file.with_name(re.sub(r"[^\w\-.]", "-", file.name))
-            progress.console.log(
-                f"Saving {escape(repr(url))} to [blue][link={file.absolute().as_uri()}]{file.name}[/]."
-            )
-
-        if not file.suffix and response.headers.get("Content-Type"):
-            ct = response.headers["Content-Type"].split(";")[0].split("/")[1]
-            try:
-                file = file.with_suffix(ct)
-            except ValueError:
-                progress.console.log(f"[orange]Failed to detect file suffix for {file.name}.")
-                file = file.with_suffix("")
-
-        try:
-            length = response.headers.get("Content-Length")
-            if length is not None:
-                length = int(length)
-            else:
-                progress.console.log(
-                    f"[red bold]{response.url.path} did not return a content length! "
-                    f"Download time is unknown and ETA will be unavailable."
-                )
-        except (TypeError, ValueError):
-            progress.update(task, total=1, completed=1, description="Get %s - failed!" % response.url.host)
+    _url = urlparse(url)
+    display_domain = _url.hostname
+    task = progress.add_task("Get %s" % display_domain, total=0, completed=0, start=False)
+    req = client.stream("GET", url, auth=authorisation)
+    if authorisation:
+        if await requires_authentication(client, url, try_head_first=True):
+            progress.console.log("%s requires authentication. Sending basic auth." % display_domain)
+            del req
+            req = client.stream("GET", url, auth=authorisation)
         else:
-            progress.update(
-                task,
-                total=length,
-                completed=0,
-                description="Get %s (%r)"
-                % (
-                    display_domain,
-                    file.name,
-                ),
-                pulse=True,
-            )
+            progress.console.log("%s does not require authentication." % display_domain)
+    try:
+        async with req as response:
+            progress.start_task(task)
+            response: Response
+            if response.status_code not in range(200, 300):
+                progress.update(
+                    task,
+                    total=1,
+                    completed=1,
+                    description="Get %s - [red]status %d[/]" % (response.url.host, response.status_code),
+                )
+                return
 
-            if buffer:
-                write_file = BytesIO()
-            else:
-                write_file = file.open("wb+")
+            display_domain = response.url.host
+            if response.history:
+                for historical_response in reversed(response.history):
+                    historical_response: Response
+                    progress.console.log(
+                        "{} -> {}".format(
+                            escape(str(historical_response.url)),
+                            escape(str((historical_response.history or [response])[-1].url)),
+                        )
+                    )
+                    if historical_response.url.host not in display_domain:
+                        display_domain += "/" + historical_response.url.host
+
+            # Now we need to perform some black magic fuckery
+            display_domain = ">".join(reversed(display_domain.split("/")))
+            # ^ This just reverses the order of the domains so that they're in the correct order
+
+            if file is None:
+                url = response.url.path
+                fp = url.split("/")[-1]
+                file = directory / fp
+                file = file.with_name(re.sub(r"[^\w\-.]", "-", file.name))
+                progress.console.log(
+                    f"Saving {escape(repr(url))} to [blue][link={file.absolute().as_uri()}]{file.name}[/]."
+                )
+
+            if not file.suffix and response.headers.get("Content-Type"):
+                ct = response.headers["Content-Type"].split(";")[0].split("/")[1]
+                try:
+                    file = file.with_suffix(ct)
+                except ValueError:
+                    progress.console.log(f"[orange]Failed to detect file suffix for {file.name}.")
+                    file = file.with_suffix("")
 
             try:
-                async for chunk in response.aiter_bytes(256):
-                    write_file.write(chunk)
-                    # noinspection PyProtectedMember
-                    if progress._tasks[task].total <= response.num_bytes_downloaded:
-                        _total = response.num_bytes_downloaded
-                    else:
-                        # noinspection PyProtectedMember
-                        _total = progress._tasks[task].total
-                    progress.update(
-                        task,
-                        total=_total,
-                        completed=response.num_bytes_downloaded,
-                        description="Get %s (%r)"
-                        % (
-                            display_domain,
-                            file.name,
-                        ),
-                        pulse=True,
+                length = response.headers.get("Content-Length")
+                if length is not None:
+                    length = int(length)
+                else:
+                    progress.console.log(
+                        f"[red bold]{response.url.path} did not return a content length! "
+                        f"Download time is unknown and ETA will be unavailable."
                     )
-            except (KeyboardInterrupt, RuntimeError):
+            except (TypeError, ValueError):
+                progress.update(task, total=1, completed=1, description="Get %s - failed!" % response.url.host)
+            else:
+                progress.update(
+                    task,
+                    total=length,
+                    completed=0,
+                    description="Get %s (%r)"
+                    % (
+                        display_domain,
+                        file.name,
+                    ),
+                    pulse=True,
+                )
+
+                if buffer:
+                    write_file = BytesIO()
+                else:
+                    write_file = file.open("wb+")
+
+                try:
+                    async for chunk in response.aiter_bytes(256):
+                        write_file.write(chunk)
+                        # noinspection PyProtectedMember
+                        if progress._tasks[task].total <= response.num_bytes_downloaded:
+                            _total = response.num_bytes_downloaded
+                        else:
+                            # noinspection PyProtectedMember
+                            _total = progress._tasks[task].total
+                        progress.update(
+                            task,
+                            total=_total,
+                            completed=response.num_bytes_downloaded,
+                            description="Get %s (%r)"
+                            % (
+                                display_domain,
+                                file.name,
+                            ),
+                            pulse=True,
+                        )
+                except (KeyboardInterrupt, RuntimeError):
+                    progress.console.log(f"Cancelling download {file.name!r}")
+                    write_file.close()
+                    try:
+                        await response.aclose()
+                    except (Exception, RuntimeError):
+                        response.close()
+                    return
+                except (ReadError, TimeoutException, ConnectError) as e:
+                    progress.remove_task(task)
+                    progress.console.log(f"[red]Fatal error downloading {file.name}: {repr(e)}")
+                    write_file.close()
+                    try:
+                        await response.aclose()
+                    except (Exception, RuntimeError):
+                        response.close()
+                    return
+                write_file.flush()
+                if buffer:
+                    with file.open("wb+") as foo:
+                        foo.write(write_file.read())
                 write_file.close()
-                await response.aclose()
-                return
-            write_file.flush()
-            if buffer:
-                with file.open("wb+") as foo:
-                    foo.write(write_file.read())
+    except (ReadError, TimeoutException, ConnectError) as e:
+        if file is None:
+            file = Path(os.urandom(6).hex())
+        progress.remove_task(task)
+        progress.console.log(f"[red]Fatal error downloading {file.name}: {repr(e)}")
+        try:
             write_file.close()
+        except UnboundLocalError:
+            pass
+        try:
+            await response.aclose()
+        except RuntimeError:
+            response.close()
+        except UnboundLocalError:
+            pass
+        return
 
 
 @click.command()
@@ -181,9 +241,15 @@ async def downloader(
     type=Path,
     help="A file containing a list of URLs to grab. One URL per line. Defaults to None.",
 )
-@click.option("--follow-redirects", is_flag=True, default=False)
+@click.option("--ignore-redirects", is_flag=True, default=True)
 @click.option("--file-names", help="A list of comma-separated file names. Defaults to automatically generated")
-def download_file(
+@click.option(
+    "--read-timeout", "-R", type=float, default=60.0, help="The maximum time spent waiting for a HTTP chunk to be sent"
+)
+@click.option(
+    "--connect-timeout", "-C", type=float, default=10.0, help="The maximum time spent waiting for HTTP headers"
+)
+def cli_main(
     urls: List[str],
     username: str = None,
     password: str = None,
@@ -192,13 +258,20 @@ def download_file(
     user_agent: str = "default",
     ram_warning_at: int = 1,
     from_list: Path = None,
-    follow_redirects: bool = False,
+    ignore_redirects: bool = False,
     file_names: str = None,
+    read_timeout: float = 60.0,
+    connect_timeout: float = 60.0,
 ):
+    timeout = Timeout(
+        timeout=(connect_timeout + read_timeout) * 2, connect=connect_timeout, read=read_timeout, write=60, pool=30
+    )
+    urls = list(urls)
+    follow_redirects = not ignore_redirects
     console = Console()
     if from_list is not None:
         with from_list.open("r") as _file:
-            urls = list(filter(lambda ln: bool(ln), _file.readlines()))
+            urls += list(filter(lambda ln: bool(ln), _file.readlines()))
             console.log(
                 f"Loaded [green]{len(urls)}[/] urls from [file={from_list.absolute().as_uri()}]{from_list.name}"
             )
@@ -214,32 +287,35 @@ def download_file(
             try:
                 time.sleep(3)
             except KeyboardInterrupt:
-                return
+                raise Abort()
         ua = user_agent
     else:
         console.log("Using the user agent %r" % user_agent.lower())
     if buffer:
         console.log(
             "Notice: Data will be written to data before writing to disk. "
-            "If the download is interrupted, data will be lost!"
+            "[u]If the download is interrupted, data will be lost!"
         )
     if type(username) != type(password):
-        console.log("If username is provided, password must also be, and vice-versa.")
-        return
+        raise click.BadOptionUsage("username", "Username must be supplied with password or both omitted.")
     elif username is None and password is None:
         auth = None
     else:
         auth = (username, password)
 
     if not urls:
-        console.log("No URLs provided.")
-        return
+        raise click.BadArgumentUsage("No urls were provided")
+
+    for _url in urls:
+        if urls.count(_url) != 1:
+            console.log("Duplicate URL %r - ignoring" % _url)
+            urls.pop(urls.index(_url))
 
     if file_names:
         file_names = list(file_names.split(","))
-        for n, fn in enumerate(file_names):
+        for _n, fn in enumerate(file_names):
             if fn == "-":
-                file_names[n] = None
+                file_names[_n] = None
         file_names += [None] * (len(urls) - len(file_names))
     else:
         file_names = [None] * len(urls)
@@ -248,7 +324,9 @@ def download_file(
         threads = []
         timer = None
         timer_event = asyncio.Event()
-        async with AsyncClient(http2=True, headers={"User-Agent": ua}, follow_redirects=follow_redirects) as client:
+        async with AsyncClient(
+            http2=True, headers={"User-Agent": ua}, follow_redirects=follow_redirects, timeout=timeout
+        ) as client:
             with Progress(
                 *Progress.get_default_columns(),
                 DownloadColumn(),
@@ -274,7 +352,8 @@ def download_file(
                     threads.append(task)
                 try:
                     await asyncio.wait(threads, timeout=None, return_when=asyncio.ALL_COMPLETED)
-                except (KeyboardInterrupt, asyncio.CancelledError, RuntimeError):
+                except (KeyboardInterrupt, asyncio.CancelledError, RuntimeError, Exception):
+                    console.log("Cancelling...")
                     for task in progress.tasks:
                         if task.completed != task.total:
                             progress.update(
@@ -283,6 +362,7 @@ def download_file(
                                 completed=task.total,
                                 description=task.description + " (cancelled)",
                             )
+                    progress.refresh()
                     progress.stop()
                     for thread in threads:
                         try:
@@ -292,16 +372,21 @@ def download_file(
                                 thread.cancel()
                         except asyncio.InvalidStateError:
                             pass
+
+                    for thread in threads:
+                        await thread
+                    raise Abort()
                 finally:
                     timer_event.set()
                     if timer:
                         timer.cancel()
 
-    try:
-        asyncio.run(run())
-    except RuntimeError:
-        pass
+    asyncio.run(run())
 
 
 if __name__ == "__main__":
-    download_file()
+    warnings.simplefilter("ignore", Warning)
+    try:
+        cli_main()
+    except RuntimeError:
+        pass
