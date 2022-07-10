@@ -20,9 +20,9 @@ setup(
     install_requires=requirements,
     entry_points={
         "console_scripts": [
-            "cdl = downloader.main:download_file",
-            "cdownload = downloader.main:download_file",
-            "cdownloader = downloader.main:download_file",
+            "cdl = downloader.main:cli_main",
+            "cdownload = downloader.main:cli_main",
+            "cdownloader = downloader.main:cli_main",
         ]
     },
 )
