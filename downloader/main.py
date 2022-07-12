@@ -8,6 +8,7 @@ from typing import Tuple, List
 from urllib.parse import urlparse
 
 import click
+import httpx
 import psutil
 from click.exceptions import Exit, Abort
 from httpx import AsyncClient, Response, __version__, Timeout, TimeoutException, ReadError, ConnectError
@@ -57,6 +58,7 @@ async def requires_authentication(client: AsyncClient, url: str, *, method: str 
             return True
 
     async with client.stream(method, url, **kwargs) as response:
+        # the response is streamed here to avoid downloading the entire body to RAM before we even start
         await response.aclose()
         if response.status_code == 401 and response.headers.get("WWW-Authenticate", "").startswith("Basic"):
             # We only support basic auth rn
@@ -78,7 +80,14 @@ async def downloader(
     display_domain = _url.hostname
     task = progress.add_task("Check authentication status of  %s" % display_domain, total=0, completed=0, start=False)
     req = client.stream("GET", url, auth=authorisation)
-    if await requires_authentication(client, url, try_head_first=True):
+    try:
+        requires = await requires_authentication(client, url, try_head_first=True)
+    except httpx.HTTPError as e:
+        progress.console.log("Failed to check the authentication status of %s:", e)
+        progress.update(task, total=1, completed=1, description="Get %s - failed!" % display_domain)
+        return
+
+    if requires:
         if not authorisation:
             progress.stop()
             progress.console.clear()
@@ -101,7 +110,7 @@ async def downloader(
                     task,
                     total=1,
                     completed=1,
-                    description="Get %s - [red]status %d[/]" % (response.url.host, response.status_code),
+                    description="Get %s - [red]status %d[/]" % (display_domain, response.status_code),
                 )
                 return
 
@@ -149,7 +158,7 @@ async def downloader(
                         f"Download time is unknown and ETA will be unavailable."
                     )
             except (TypeError, ValueError):
-                progress.update(task, total=1, completed=1, description="Get %s - failed!" % response.url.host)
+                progress.update(task, total=1, completed=1, description="Get %s - failed!" % display_domain)
             else:
                 progress.update(
                     task,
@@ -300,7 +309,7 @@ def cli_main(
         console.log("Using the user agent %r" % user_agent.lower())
     if buffer:
         console.log(
-            "Notice: Data will be written to data before writing to disk. "
+            "Notice: Data will be written to RAM before writing to disk. "
             "[u]If the download is interrupted, data will be lost!"
         )
     if type(username) != type(password):
