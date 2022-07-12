@@ -76,15 +76,19 @@ async def downloader(
 ):
     _url = urlparse(url)
     display_domain = _url.hostname
-    task = progress.add_task("Get %s" % display_domain, total=0, completed=0, start=False)
+    task = progress.add_task("Check authentication status of  %s" % display_domain, total=0, completed=0, start=False)
     req = client.stream("GET", url, auth=authorisation)
-    if authorisation:
-        if await requires_authentication(client, url, try_head_first=True):
-            progress.console.log("%s requires authentication. Sending basic auth." % display_domain)
-            del req
-            req = client.stream("GET", url, auth=authorisation)
-        else:
-            progress.console.log("%s does not require authentication." % display_domain)
+    if await requires_authentication(client, url, try_head_first=True):
+        if not authorisation:
+            progress.console.log("%s requires authentication. Please input a username and password.")
+            username = progress.console.input("Username")
+            password = progress.console.input("Password", password=True)
+            authorisation = (username, password)
+        progress.console.log("%s requires authentication. Sending basic auth." % display_domain)
+        del req
+        req = client.stream("GET", url, auth=authorisation)
+    else:
+        progress.console.log("%s does not require authentication." % display_domain)
     try:
         async with req as response:
             progress.start_task(task)
