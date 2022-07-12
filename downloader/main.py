@@ -82,7 +82,7 @@ async def downloader(
         if not authorisation:
             progress.stop()
             progress.console.clear()
-            progress.console.log("%s requires authentication. Please input a username and password.")
+            progress.console.log("%s requires authentication. Please input a username and password." % display_domain)
             username = progress.console.input("Username: ")
             password = progress.console.input("Password: ", password=True)
             progress.start()
