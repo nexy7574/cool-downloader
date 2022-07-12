@@ -12,7 +12,7 @@ import psutil
 from click.exceptions import Exit, Abort
 from httpx import AsyncClient, Response, __version__, Timeout, TimeoutException, ReadError, ConnectError
 from rich.markup import escape
-from rich.progress import Progress, DownloadColumn, TransferSpeedColumn
+from rich.progress import Progress, DownloadColumn, TransferSpeedColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn, TextColumn
 from rich.console import Console
 from pathlib import Path
 from io import BytesIO
@@ -334,10 +334,35 @@ def cli_main(
         async with AsyncClient(
             http2=True, headers={"User-Agent": ua}, follow_redirects=follow_redirects, timeout=timeout
         ) as client:
+            try:
+                columns, _ = os.get_terminal_size()
+            except ValueError:
+                columns = 60
+
+            if columns >= 130:
+                columns = [
+                    *Progress.get_default_columns(),
+                    DownloadColumn(),
+                    TransferSpeedColumn()
+                ]
+            elif columns >= 80:
+                columns = [
+                    *Progress.get_default_columns(),
+                    BarColumn(),
+                    TaskProgressColumn(),
+                    TimeRemainingColumn(),
+                ]
+            elif columns > 60:
+                columns = [
+                    *Progress.get_default_columns()
+                ][:3]
+            else:
+                columns = [
+                    TextColumn("[progress.description]{task.description:.20}"),
+                    TaskProgressColumn()
+                ]
             with Progress(
-                *Progress.get_default_columns(),
-                DownloadColumn(),
-                TransferSpeedColumn(),
+                *columns,
                 speed_estimate_period=10,
                 refresh_per_second=5,
                 expand=True,
