@@ -357,8 +357,10 @@ def cli_main(
                     *Progress.get_default_columns()
                 ][:3]
             else:
+                free_space = columns - 4
+                free_space = max(4, free_space)
                 columns = [
-                    TextColumn("[progress.description]{task.description:.20}"),
+                    TextColumn("[progress.description]{task.description:.%s}" % free_space),
                     TaskProgressColumn()
                 ]
             with Progress(
