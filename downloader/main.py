@@ -80,9 +80,12 @@ async def downloader(
     req = client.stream("GET", url, auth=authorisation)
     if await requires_authentication(client, url, try_head_first=True):
         if not authorisation:
+            progress.stop()
+            progress.console.clear()
             progress.console.log("%s requires authentication. Please input a username and password.")
-            username = progress.console.input("Username")
-            password = progress.console.input("Password", password=True)
+            username = progress.console.input("Username: ")
+            password = progress.console.input("Password: ", password=True)
+            progress.start()
             authorisation = (username, password)
         progress.console.log("%s requires authentication. Sending basic auth." % display_domain)
         del req
@@ -229,7 +232,7 @@ async def downloader(
 @click.argument("urls", nargs=-1)
 @click.option("--username", default=None)
 @click.option("--password", default=None, help="The password to access websites (only sent if requested)")
-@click.option("--buffer", default=False, help="Whether to write data to memory before disk (faster)")
+@click.option("--buffer", default=False, is_flag=True, help="Whether to write data to memory before disk (faster)")
 @click.option("--output-directory", "-O", type=Path, default=Path.cwd())
 @click.option("--user-agent", default="default", help="Which user agent to select. Can be custom or a browser name.")
 @click.option(
