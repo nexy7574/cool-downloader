@@ -345,33 +345,26 @@ def cli_main(
         ) as client:
             try:
                 columns, _ = os.get_terminal_size()
+                _columns = columns
             except ValueError:
                 columns = 60
 
-            if columns >= 130:
+            free_space = columns - 4
+            free_space = max(4, free_space)
+
+            if columns >= 90:
                 columns = [
                     *Progress.get_default_columns(),
                     DownloadColumn(),
-                    TransferSpeedColumn()
+                    TransferSpeedColumn(),
                 ]
-            elif columns >= 80:
-                columns = [
-                    *Progress.get_default_columns(),
-                    BarColumn(),
-                    TaskProgressColumn(),
-                    TimeRemainingColumn(),
-                ]
-            elif columns > 60:
-                columns = [
-                    *Progress.get_default_columns()
-                ][:3]
             else:
-                free_space = columns - 4
-                free_space = max(4, free_space)
                 columns = [
                     TextColumn("[progress.description]{task.description:.%s}" % free_space),
                     TaskProgressColumn()
                 ]
+                if _columns >= 70:
+                    columns.insert(1, DownloadColumn())
             with Progress(
                 *columns,
                 speed_estimate_period=10,
