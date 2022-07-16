@@ -349,7 +349,7 @@ def cli_main(
             except ValueError:
                 columns = 60
 
-            free_space = columns - 4
+            free_space = columns - 10
             free_space = max(4, free_space)
 
             if columns >= 90:
