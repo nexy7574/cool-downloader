@@ -358,6 +358,11 @@ def cli_main(
                     DownloadColumn(),
                     TransferSpeedColumn(),
                 ]
+            elif columns <= 50:
+                columns = [
+                    TextColumn("[progress.description]{task.description:.%s}" % free_space),
+                    TaskProgressColumn()
+                ]
             else:
                 columns = [
                     TextColumn("[progress.description]{task.description:.%s}" % free_space),
