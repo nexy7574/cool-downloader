@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import re
 import time
@@ -13,7 +14,15 @@ import psutil
 from click.exceptions import Exit, Abort
 from httpx import AsyncClient, Response, __version__, Timeout, TimeoutException, ReadError, ConnectError
 from rich.markup import escape
-from rich.progress import Progress, DownloadColumn, TransferSpeedColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn, TextColumn
+from rich.progress import (
+    Progress,
+    DownloadColumn,
+    TransferSpeedColumn,
+    BarColumn,
+    TaskProgressColumn,
+    TimeRemainingColumn,
+    TextColumn,
+)
 from rich.console import Console
 from pathlib import Path
 from io import BytesIO
@@ -75,6 +84,7 @@ async def downloader(
     *,
     authorisation: Tuple[str, str] = None,
     buffer: bool = True,
+    chunk_size: float = 1024**2,
 ):
     _url = urlparse(url)
     display_domain = _url.hostname
@@ -178,7 +188,7 @@ async def downloader(
                     write_file = file.open("wb+")
 
                 try:
-                    async for chunk in response.aiter_bytes(256):
+                    async for chunk in response.aiter_bytes(chunk_size):
                         write_file.write(chunk)
                         # noinspection PyProtectedMember
                         if progress._tasks[task].total <= response.num_bytes_downloaded:
@@ -248,7 +258,7 @@ async def downloader(
     "--ram-warning-at",
     type=int,
     default=1,
-    help="At what point to worry about ram usage " "(display a warning when there is less than this much ram free)",
+    help="At what point to worry about ram usage (display a warning when there is less than this much ram free)",
 )
 @click.option(
     "--from-list",
@@ -265,6 +275,9 @@ async def downloader(
 @click.option(
     "--connect-timeout", "-C", type=float, default=10.0, help="The maximum time spent waiting for HTTP headers"
 )
+@click.option(
+    "--chunk-size", "-S", type=int, default=1024 * 1024, help="The size of download chunks. Defaults to 1mib."
+)
 def cli_main(
     urls: List[str],
     username: str = None,
@@ -278,7 +291,12 @@ def cli_main(
     file_names: str = None,
     read_timeout: float = 60.0,
     connect_timeout: float = 60.0,
+    chunk_size: int = 1024 * 1024,
 ):
+    if Path("./cookies.json").exists():
+        cookies = json.loads(Path("./cookies.json").read_text())
+    else:
+        cookies = {}
     timeout = Timeout(
         timeout=(connect_timeout + read_timeout) * 2, connect=connect_timeout, read=read_timeout, write=60, pool=30
     )
@@ -341,7 +359,12 @@ def cli_main(
         timer = None
         timer_event = asyncio.Event()
         async with AsyncClient(
-            http2=True, headers={"User-Agent": ua}, follow_redirects=follow_redirects, timeout=timeout
+            http2=True,
+            headers={"User-Agent": ua},
+            follow_redirects=follow_redirects,
+            timeout=timeout,
+            cookies=cookies,
+            trust_env=True,
         ) as client:
             try:
                 columns, _ = os.get_terminal_size()
@@ -361,12 +384,12 @@ def cli_main(
             elif columns <= 50:
                 columns = [
                     TextColumn("[progress.description]{task.description:.%s}" % free_space),
-                    TaskProgressColumn()
+                    TaskProgressColumn(),
                 ]
             else:
                 columns = [
                     TextColumn("[progress.description]{task.description:.%s}" % free_space),
-                    TaskProgressColumn()
+                    TaskProgressColumn(),
                 ]
                 if _columns >= 70:
                     columns.insert(1, DownloadColumn())
@@ -387,7 +410,14 @@ def cli_main(
                         path = None
                     task = asyncio.create_task(
                         downloader(
-                            client, progress, url, path, authorisation=auth, directory=output_directory, buffer=buffer
+                            client,
+                            progress,
+                            url,
+                            path,
+                            authorisation=auth,
+                            directory=output_directory,
+                            buffer=buffer,
+                            chunk_size=chunk_size,
                         )
                     )
                     threads.append(task)
